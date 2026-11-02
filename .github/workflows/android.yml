@@ -3,8 +3,10 @@ name: Build app
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -19,16 +21,34 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Test shared logic
-        run: ./gradlew -p core test
+      - name: Test and build the APK
+        run: |
+          set -o pipefail
+          { ./gradlew -p core test && ./gradlew :app:assembleDebug; } 2>&1 | tee build.log
+          cp app/build/outputs/apk/debug/app-debug.apk "estante-${{ github.run_number }}.apk"
 
-      - name: Build the APK
-        run: ./gradlew :app:assembleDebug
+      - name: Publish the APK as a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}" "estante-${{ github.run_number }}.apk" \
+            --title "Estante build ${{ github.run_number }}" \
+            --notes "Open this page on the phone and tap the .apk file to install it." \
+            --latest
 
-      - name: Name the APK after the build number
-        run: cp app/build/outputs/apk/debug/app-debug.apk "estante-${{ github.run_number }}.apk"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: estante-${{ github.run_number }}
-          path: estante-${{ github.run_number }}.apk
+      # Claude's cloud session can read this repository through git but not GitHub's API, so the build
+      # result (APK or log) is also pushed to the ci-result branch for it to fetch.
+      - name: Share the result on the ci-result branch
+        if: always()
+        run: |
+          mkdir -p /tmp/ci-result
+          cp build.log /tmp/ci-result/ 2>/dev/null || echo "No build log was written." > /tmp/ci-result/build.log
+          cp estante-*.apk /tmp/ci-result/ 2>/dev/null || true
+          echo "${{ job.status }} build ${{ github.run_number }} of ${{ github.sha }}" > /tmp/ci-result/STATUS
+          cd /tmp/ci-result
+          git init -q -b ci-result
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Build ${{ github.run_number }}: ${{ job.status }}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-result
