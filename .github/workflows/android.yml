@@ -3,6 +3,14 @@ name: Build app
 on:
   push:
     branches: [main]
+    paths:
+      - 'app/**'
+      - 'core/**'
+      - 'gradle/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - 'gradlew'
+      - '.github/workflows/android.yml'
   workflow_dispatch:
 
 permissions:

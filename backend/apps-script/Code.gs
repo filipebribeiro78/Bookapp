@@ -5,17 +5,19 @@
  * Columns are found by their header text, so you can reorder columns or add your own.
  */
 
-const VERSION = '1';
+const VERSION = '2';
 const BOOKS = 'Books';
 const PHOTOS = 'Photos';
 const BOOK_HEADERS = [
   'Book ID', 'Book name', 'Authors', 'Date of publication', 'Original year', 'Publisher', 'ISBN',
-  'Condition', 'Cover thumbnail', 'Photo links', 'Asking price (EUR)', 'Price status',
+  'Language', 'Pages', 'Condition', 'Cover thumbnail', 'Photo links', 'Asking price (EUR)', 'Price status',
   'Description (EN)', 'Description (PT)', 'Drive folder', 'Status', 'OLX status', 'OLX link',
   'WordPress status', 'WordPress link', 'Created', 'Updated',
 ];
 const PHOTO_HEADERS = ['Photo ID', 'Book ID', 'Book name', 'File name', 'Type of page', 'Thumbnail', 'Link', 'Taken at'];
 const THUMBNAIL_ROW_HEIGHT = 90;
+// Kept as plain text so Sheets doesn't turn an ISBN into a number or "1982-05" into a date.
+const TEXT_COLUMNS = ['ISBN', 'Date of publication'];
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -85,6 +87,10 @@ function doPost(e) {
         return reply_(withLock_(() => uploadPhoto_(request.bookId, request.photo)));
       case 'finishBook':
         return reply_(withLock_(() => finishBook_(request.bookId)));
+      case 'listBooks':
+        return reply_(listBooks_(request.status));
+      case 'updateBook':
+        return reply_(withLock_(() => updateBook_(request.bookId, request.fields)));
       default:
         return reply_({ ok: false, error: `Unknown action: ${request.action}` });
     }
@@ -168,6 +174,31 @@ function finishBook_(bookId) {
   return { ok: true };
 }
 
+/** Every book as {header: value as displayed}, optionally only those with the given Status. */
+function listBooks_(status) {
+  const sheet = sheet_(BOOKS);
+  if (sheet.getLastRow() < 2) return { ok: true, books: [] };
+  const headers = headers_(sheet);
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getDisplayValues();
+  const books = rows
+    .map((row) => Object.fromEntries(headers.map((header, i) => [header, row[i]])))
+    .filter((book) => book['Book ID'] && (!status || book.Status === status));
+  return { ok: true, books };
+}
+
+/** Writes the given {header: value} fields for one book. */
+function updateBook_(bookId, fields) {
+  const sheet = sheet_(BOOKS);
+  const row = findRow_(sheet, bookId);
+  if (!row) throw new Error(`Book ${bookId} is not in the Sheet.`);
+  Object.keys(fields || {}).forEach((header) => {
+    if (header === 'Book ID') throw new Error('The Book ID column cannot be changed.');
+    setCell_(sheet, row, header, fields[header]);
+  });
+  setCell_(sheet, row, 'Updated', new Date());
+  return { ok: true };
+}
+
 // ---- helpers ----
 
 function ensureSheet_(spreadsheet, name, headers, thumbnailHeader) {
@@ -176,6 +207,9 @@ function ensureSheet_(spreadsheet, name, headers, thumbnailHeader) {
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
     sheet.setFrozenRows(1);
     sheet.setColumnWidth(headers.indexOf(thumbnailHeader) + 1, 120);
+    TEXT_COLUMNS.filter((header) => headers.includes(header)).forEach((header) => {
+      sheet.getRange(2, headers.indexOf(header) + 1, sheet.getMaxRows() - 1, 1).setNumberFormat('@');
+    });
   }
   return sheet;
 }
@@ -207,7 +241,9 @@ function getCell_(sheet, row, header) {
 }
 
 function setCell_(sheet, row, header, value) {
-  sheet.getRange(row, column_(sheet, header)).setValue(value);
+  const range = sheet.getRange(row, column_(sheet, header));
+  if (TEXT_COLUMNS.includes(header)) range.setNumberFormat('@');
+  range.setValue(value);
 }
 
 function rowValues_(sheet, fields) {
